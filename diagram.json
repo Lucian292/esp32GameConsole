@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "author": "GitHub Copilot",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 48, "left": 24, "attrs": {} },
+    { "type": "wokwi-ili9341", "id": "tft", "top": 8, "left": 322, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btnUp", "top": 360, "left": 368, "attrs": { "label": "Sus" } },
+    { "type": "wokwi-pushbutton", "id": "btnLeft", "top": 410, "left": 318, "attrs": { "label": "Stanga" } },
+    { "type": "wokwi-pushbutton", "id": "btnRight", "top": 410, "left": 418, "attrs": { "label": "Dreapta" } },
+    { "type": "wokwi-pushbutton", "id": "btnDown", "top": 460, "left": 368, "attrs": { "label": "Jos" } },
+    { "type": "wokwi-pushbutton", "id": "btnA", "top": 360, "left": 524, "attrs": { "label": "A" } },
+    { "type": "wokwi-pushbutton", "id": "btnB", "top": 410, "left": 524, "attrs": { "label": "B" } },
+    { "type": "wokwi-pushbutton", "id": "btnStart", "top": 360, "left": 608, "attrs": { "label": "Start" } },
+    { "type": "wokwi-pushbutton", "id": "btnSelect", "top": 410, "left": 608, "attrs": { "label": "Select" } },
+    { "type": "wokwi-buzzer", "id": "buzzer", "top": 24, "left": 640, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo", "top": 104, "left": 638, "attrs": { "horn": "single" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+
+    [ "tft:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "tft:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "tft:LED", "esp:3V3", "red", [ "v0" ] ],
+    [ "tft:CS", "esp:D5", "green", [ "h0" ] ],
+    [ "tft:RST", "esp:D4", "green", [ "h0" ] ],
+    [ "tft:DC", "esp:D2", "green", [ "h0" ] ],
+    [ "tft:MOSI", "esp:D23", "green", [ "h0" ] ],
+    [ "tft:SCK", "esp:D18", "green", [ "h0" ] ],
+    [ "tft:MISO", "esp:D19", "green", [ "h0" ] ],
+
+    [ "btnUp:1", "esp:D32", "green", [ "v60", "h-100", "v-20" ] ],
+    [ "btnUp:2", "esp:GND.1", "black", [ "v70", "h-110" ] ],
+    [ "btnLeft:1", "esp:D25", "green", [ "v50", "h-80", "v-30" ] ],
+    [ "btnLeft:2", "esp:GND.1", "black", [ "v60", "h-90" ] ],
+    [ "btnRight:1", "esp:D26", "green", [ "v50", "h-150", "v-30" ] ],
+    [ "btnRight:2", "esp:GND.1", "black", [ "v60", "h-160" ] ],
+    [ "btnDown:1", "esp:D33", "green", [ "v-20", "h-100", "v20" ] ],
+    [ "btnDown:2", "esp:GND.1", "black", [ "v10", "h-110" ] ],
+    [ "btnA:1", "esp:D27", "green", [ "v0", "h-200" ] ],
+    [ "btnA:2", "esp:GND.1", "black", [ "v10", "h-210" ] ],
+    [ "btnB:1", "esp:D14", "green", [ "v20", "h-200" ] ],
+    [ "btnB:2", "esp:GND.1", "black", [ "v30", "h-210" ] ],
+    [ "btnStart:1", "esp:D22", "green", [ "v0", "h-300" ] ],
+    [ "btnStart:2", "esp:GND.1", "black", [ "v10", "h-310" ] ],
+    [ "btnSelect:1", "esp:D13", "green", [ "v20", "h-300" ] ],
+    [ "btnSelect:2", "esp:GND.1", "black", [ "v30", "h-310" ] ],
+
+    [ "buzzer:1", "esp:D15", "green", [ "h0" ] ],
+    [ "buzzer:2", "esp:GND.1", "black", [ "h0" ] ],
+
+    [ "servo:SIG", "esp:D21", "green", [ "h0" ] ],
+    [ "servo:V+", "esp:VIN", "red", [ "h0" ] ],
+    [ "servo:GND", "esp:GND.1", "black", [ "h0" ] ]
+  ]
+}
