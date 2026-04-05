@@ -1,18 +1,17 @@
-#include <Arduino.h>
+﻿#include <Arduino.h>
 
 #include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
+#include <Adafruit_SSD1306.h>
 #include <ESP32Servo.h>
 
 #include <array>
+#include <cstring>
 
-// Hardware pins for the ESP32 DevKit V1 / Wokwi wiring.
-constexpr uint8_t TFT_CS = 5;
-constexpr uint8_t TFT_RST = 4;
-constexpr uint8_t TFT_DC = 2;
-constexpr uint8_t TFT_MOSI = 23;
-constexpr uint8_t TFT_SCK = 18;
-constexpr uint8_t TFT_MISO = 19;
+constexpr uint8_t OLED_SDA = 21;
+constexpr uint8_t OLED_SCL = 22;
+constexpr uint8_t OLED_ADDRESS = 0x3C;
+constexpr int OLED_WIDTH = 128;
+constexpr int OLED_HEIGHT = 64;
 
 constexpr uint8_t BUTTON_UP = 32;
 constexpr uint8_t BUTTON_DOWN = 33;
@@ -20,19 +19,23 @@ constexpr uint8_t BUTTON_LEFT = 25;
 constexpr uint8_t BUTTON_RIGHT = 26;
 constexpr uint8_t BUTTON_A = 27;
 constexpr uint8_t BUTTON_B = 14;
-constexpr uint8_t BUTTON_START = 22;
-constexpr uint8_t BUTTON_SELECT = 13;
+constexpr uint8_t BUTTON_START = 18;
+constexpr uint8_t BUTTON_SELECT = 19;
 
 constexpr uint8_t BUZZER_PIN = 15;
-constexpr uint8_t SERVO_PIN = 21;
+constexpr uint8_t SERVO_PIN = 13;
 
-Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);
+constexpr uint8_t SERVO_REST_ANGLE = 90;
+constexpr uint8_t SERVO_UNLOCK_ANGLE = 25;
+constexpr uint32_t SERVO_TEST_DURATION_MS = 2000;
 
-enum class Screen {
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+
+enum class Screen : uint8_t {
   MainMenu,
-  Settings,
   InputTest,
-  PlaceholderGame,
+  Settings,
+  Placeholder,
 };
 
 enum class MainMenuItem : uint8_t {
@@ -43,8 +46,8 @@ enum class MainMenuItem : uint8_t {
 };
 
 enum class SettingsItem : uint8_t {
-  InputTest = 0,
-  ServoTest = 1,
+  ServoTest = 0,
+  BuzzerTest = 1,
   Back = 2,
   Count = 3,
 };
@@ -65,47 +68,39 @@ struct Button {
   uint8_t pin = 0;
   bool stableState = HIGH;
   bool lastRawState = HIGH;
-  uint32_t lastTransitionMs = 0;
-  bool pressedEdge = false;
-  bool releasedEdge = false;
+  uint32_t lastChangeMs = 0;
+  bool justPressedEdge = false;
 
-  void begin() {
+  void begin(uint8_t assignedPin) {
+    pin = assignedPin;
     pinMode(pin, INPUT_PULLUP);
     stableState = digitalRead(pin);
     lastRawState = stableState;
-    lastTransitionMs = millis();
+    lastChangeMs = millis();
   }
 
   void update(uint32_t now) {
-    pressedEdge = false;
-    releasedEdge = false;
-
+    justPressedEdge = false;
     const bool rawState = digitalRead(pin);
     if (rawState != lastRawState) {
       lastRawState = rawState;
-      lastTransitionMs = now;
+      lastChangeMs = now;
     }
 
-    if ((now - lastTransitionMs) >= 25 && stableState != lastRawState) {
+    if ((now - lastChangeMs) >= 25 && stableState != lastRawState) {
       stableState = lastRawState;
       if (stableState == LOW) {
-        pressedEdge = true;
-      } else {
-        releasedEdge = true;
+        justPressedEdge = true;
       }
     }
   }
 
-  bool isPressed() const {
+  bool pressed() const {
     return stableState == LOW;
   }
 
   bool justPressed() const {
-    return pressedEdge;
-  }
-
-  bool justReleased() const {
-    return releasedEdge;
+    return justPressedEdge;
   }
 };
 
@@ -118,20 +113,16 @@ class Buzzer {
     noTone(pin_);
   }
 
-  void click() const {
-    tone(pin_, 2200, 30);
+  void navBeep() const {
+    tone(pin_, 2200, 25);
   }
 
-  void select() const {
-    tone(pin_, 1400, 55);
+  void confirmBeep() const {
+    tone(pin_, 1400, 45);
   }
 
-  void info() const {
-    tone(pin_, 1800, 25);
-  }
-
-  void error() const {
-    tone(pin_, 240, 80);
+  void errorBeep() const {
+    tone(pin_, 300, 90);
   }
 
  private:
@@ -146,58 +137,68 @@ class ServoController {
     servo_.write(restAngle_);
   }
 
+  void startTest(uint32_t now) {
+    if (running_) {
+      return;
+    }
+    servo_.write(unlockAngle_);
+    running_ = true;
+    endsAtMs_ = now + SERVO_TEST_DURATION_MS;
+  }
+
   bool update(uint32_t now) {
-    if (testActive_ && static_cast<int32_t>(now - testReturnAtMs_) >= 0) {
+    if (running_ && static_cast<int32_t>(now - endsAtMs_) >= 0) {
       servo_.write(restAngle_);
-      testActive_ = false;
+      running_ = false;
       return true;
     }
-
     return false;
   }
 
-  void triggerTest(uint32_t now) {
-    if (testActive_) {
-      return;
-    }
-
-    servo_.write(testAngle_);
-    testReturnAtMs_ = now + 320;
-    testActive_ = true;
-  }
-
-  bool isTesting() const {
-    return testActive_;
+  bool isRunning() const {
+    return running_;
   }
 
  private:
   Servo servo_;
-  const int restAngle_ = 90;
-  const int testAngle_ = 25;
-  bool testActive_ = false;
-  uint32_t testReturnAtMs_ = 0;
+  const uint8_t restAngle_ = SERVO_REST_ANGLE;
+  const uint8_t unlockAngle_ = SERVO_UNLOCK_ANGLE;
+  bool running_ = false;
+  uint32_t endsAtMs_ = 0;
 };
 
-const std::array<uint8_t, static_cast<size_t>(ButtonId::Count)> buttonPins = {{
-  BUTTON_UP,
-  BUTTON_DOWN,
-  BUTTON_LEFT,
-  BUTTON_RIGHT,
-  BUTTON_A,
-  BUTTON_B,
-  BUTTON_START,
-  BUTTON_SELECT,
+constexpr std::array<uint8_t, static_cast<size_t>(ButtonId::Count)> buttonPins = {{
+    BUTTON_UP,
+    BUTTON_DOWN,
+    BUTTON_LEFT,
+    BUTTON_RIGHT,
+    BUTTON_A,
+    BUTTON_B,
+    BUTTON_START,
+    BUTTON_SELECT,
 }};
 
-const std::array<const char *, static_cast<size_t>(ButtonId::Count)> buttonLabels = {{
-    "Sus",
-    "Jos",
-    "Stanga",
-    "Dreapta",
+constexpr std::array<const char *, static_cast<size_t>(ButtonId::Count)> buttonLabels = {{
+    "UP",
+    "DOWN",
+    "LEFT",
+    "RIGHT",
     "A",
     "B",
-    "Start",
-    "Select",
+    "START",
+    "SELECT",
+}};
+
+constexpr std::array<const char *, static_cast<size_t>(MainMenuItem::Count)> mainMenuLabels = {{
+    "Snake",
+    "Tetris",
+    "Settings",
+}};
+
+constexpr std::array<const char *, static_cast<size_t>(SettingsItem::Count)> settingsLabels = {{
+    "Servo test",
+    "Buzzer test",
+    "Back",
 }};
 
 Buzzer buzzer(BUZZER_PIN);
@@ -206,197 +207,149 @@ std::array<Button, static_cast<size_t>(ButtonId::Count)> buttons;
 
 Screen currentScreen = Screen::MainMenu;
 MainMenuItem mainMenuSelection = MainMenuItem::Snake;
-SettingsItem settingsSelection = SettingsItem::InputTest;
-String placeholderTitle = "";
-uint8_t inputSeenMask = 0;
+SettingsItem settingsSelection = SettingsItem::ServoTest;
+uint8_t currentPressedMask = 0;
+uint8_t renderedPressedMask = 0;
+uint8_t lastPressedButton = 255;
 bool screenDirty = true;
-bool buttonsReady = false;
-
-// Track last button press for real-time feedback
-int lastButtonPressed = -1;
-uint32_t lastButtonPressedAtMs = 0;
-
-constexpr uint16_t COLOR_BG = 0x08A2;
-constexpr uint16_t COLOR_PANEL = 0x2945;
-constexpr uint16_t COLOR_PANEL_ALT = 0x31A6;
-constexpr uint16_t COLOR_HIGHLIGHT = ILI9341_CYAN;
-constexpr uint16_t COLOR_HIGHLIGHT_TEXT = ILI9341_BLACK;
-constexpr uint16_t COLOR_TEXT = ILI9341_WHITE;
-constexpr uint16_t COLOR_MUTED = 0xBDF7;
-
-int countSeenButtons() {
-  int count = 0;
-  for (uint8_t index = 0; index < static_cast<uint8_t>(ButtonId::Count); ++index) {
-    if (inputSeenMask & (1U << index)) {
-      ++count;
-    }
-  }
-  return count;
-}
+bool buzzerTestActive = false;
+uint32_t buzzerTestEndsAtMs = 0;
 
 void setScreen(Screen screen) {
   currentScreen = screen;
   screenDirty = true;
 }
 
-void selectMainMenuItem(MainMenuItem item) {
-  mainMenuSelection = item;
-  screenDirty = true;
-}
-
-void selectSettingsItem(SettingsItem item) {
-  settingsSelection = item;
-  screenDirty = true;
-}
-
-void drawCenteredText(const char *text, int16_t centerX, int16_t y, uint8_t size, uint16_t color) {
+void drawCenteredText(int16_t centerX, int16_t y, const char *text, uint8_t size = 1) {
   int16_t x1 = 0;
   int16_t y1 = 0;
   uint16_t w = 0;
   uint16_t h = 0;
-  tft.setTextSize(size);
-  tft.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-  tft.setCursor(centerX - static_cast<int16_t>(w / 2), y);
-  tft.setTextColor(color);
-  tft.print(text);
+  display.setTextSize(size);
+  display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+  display.setCursor(centerX - static_cast<int16_t>(w / 2), y);
+  display.print(text);
 }
 
-void drawCard(int16_t x, int16_t y, int16_t w, int16_t h, bool selected, const char *title, const char *subtitle = nullptr) {
-  const uint16_t fillColor = selected ? COLOR_HIGHLIGHT : COLOR_PANEL;
-  const uint16_t borderColor = selected ? COLOR_HIGHLIGHT : COLOR_PANEL_ALT;
-  const uint16_t titleColor = selected ? COLOR_HIGHLIGHT_TEXT : COLOR_TEXT;
-  const uint16_t subtitleColor = selected ? COLOR_HIGHLIGHT_TEXT : COLOR_MUTED;
+void buildPressedList(char *buffer, size_t bufferSize) {
+  buffer[0] = '\0';
+  bool first = true;
+  for (uint8_t index = 0; index < static_cast<uint8_t>(ButtonId::Count); ++index) {
+    if ((currentPressedMask & (1U << index)) == 0) {
+      continue;
+    }
 
-  tft.fillRoundRect(x, y, w, h, 10, fillColor);
-  tft.drawRoundRect(x, y, w, h, 10, borderColor);
-  tft.setTextWrap(false);
-
-  tft.setTextSize(2);
-  tft.setTextColor(titleColor);
-  tft.setCursor(x + 12, y + 12);
-  tft.print(title);
-
-  if (subtitle != nullptr) {
-    tft.setTextSize(1);
-    tft.setTextColor(subtitleColor);
-    tft.setCursor(x + 12, y + 42);
-    tft.print(subtitle);
+    if (!first) {
+      strncat(buffer, ", ", bufferSize - strlen(buffer) - 1);
+    }
+    strncat(buffer, buttonLabels[index], bufferSize - strlen(buffer) - 1);
+    first = false;
   }
-}
 
-void drawHeader(const char *title, const char *subtitle = nullptr) {
-  tft.fillRect(0, 0, 240, 54, COLOR_PANEL);
-  tft.drawFastHLine(0, 54, 240, COLOR_PANEL_ALT);
-  tft.setTextWrap(false);
-  drawCenteredText(title, 120, 12, 2, COLOR_TEXT);
-  if (subtitle != nullptr) {
-    drawCenteredText(subtitle, 120, 34, 1, COLOR_MUTED);
+  if (first) {
+    strlcpy(buffer, "None", bufferSize);
   }
-}
-
-void drawFooter(const char *text) {
-  tft.fillRect(0, 294, 240, 26, COLOR_PANEL);
-  tft.drawFastHLine(0, 294, 240, COLOR_PANEL_ALT);
-  drawCenteredText(text, 120, 302, 1, COLOR_MUTED);
 }
 
 void drawMainMenu() {
-  tft.fillScreen(COLOR_BG);
-  drawHeader("ESP32 Game Console", "Prototype framework");
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
 
-  drawCard(24, 74, 192, 48, mainMenuSelection == MainMenuItem::Snake, "Snake", "Not implemented yet");
-  drawCard(24, 130, 192, 48, mainMenuSelection == MainMenuItem::Tetris, "Tetris", "Not implemented yet");
-  drawCard(24, 186, 192, 48, mainMenuSelection == MainMenuItem::Settings, "Settings", "Hardware tests and info");
+  display.setCursor(0, 0);
+  display.print("ESP32 Game Console");
+  display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
 
-  drawFooter("UP/DOWN choose  A or START confirm");
-}
-
-void drawSettingsScreen() {
-  tft.fillScreen(COLOR_BG);
-  drawHeader("Settings", "Project info and hardware tests");
-
-  char statusLine[48];
-  snprintf(statusLine, sizeof(statusLine), "Input test status: %d/8 buttons seen", countSeenButtons());
-
-  tft.fillRoundRect(16, 64, 208, 52, 10, COLOR_PANEL);
-  tft.drawRoundRect(16, 64, 208, 52, 10, COLOR_PANEL_ALT);
-  tft.setTextSize(2);
-  tft.setTextColor(COLOR_TEXT);
-  tft.setCursor(28, 77);
-  tft.print("ESP32 Game Console");
-  tft.setTextSize(1);
-  tft.setTextColor(COLOR_MUTED);
-  tft.setCursor(28, 97);
-  tft.print(statusLine);
-
-  drawCard(24, 132, 192, 48, settingsSelection == SettingsItem::InputTest, "Input Test", "Highlight each button as you press it");
-  drawCard(24, 188, 192, 48, settingsSelection == SettingsItem::ServoTest, "Servo Test", "Moves the servo briefly and returns it");
-  drawCard(24, 244, 192, 48, settingsSelection == SettingsItem::Back, "Back", "Return to the main menu");
-
-  char servoLine[40];
-  snprintf(servoLine, sizeof(servoLine), "Servo status: %s", servoController.isTesting() ? "running" : "ready");
-  drawFooter(servoLine);
-}
-
-void drawInputTestScreen() {
-  tft.fillScreen(COLOR_BG);
-  drawHeader("Input Test", "Press each button and watch the highlights");
-
-  const int16_t startX = 14;
-  const int16_t startY = 68;
-  const int16_t cellW = 100;
-  const int16_t cellH = 40;
-  const int16_t gapX = 10;
-  const int16_t gapY = 10;
-
-  auto drawButtonCell = [&](ButtonId id, int16_t x, int16_t y) {
-    const bool pressed = buttons[static_cast<size_t>(id)].isPressed();
-    const bool seen = (inputSeenMask & (1U << static_cast<uint8_t>(id))) != 0;
-    const uint16_t fillColor = pressed ? COLOR_HIGHLIGHT : (seen ? COLOR_PANEL_ALT : COLOR_PANEL);
-    const uint16_t textColor = pressed ? COLOR_HIGHLIGHT_TEXT : COLOR_TEXT;
-
-    tft.fillRoundRect(x, y, cellW, cellH, 8, fillColor);
-    tft.drawRoundRect(x, y, cellW, cellH, 8, COLOR_PANEL_ALT);
-    tft.setTextColor(textColor);
-    tft.setTextSize(2);
-    tft.setCursor(x + 12, y + 12);
-    tft.print(buttonLabels[static_cast<size_t>(id)]);
-  };
-
-  drawButtonCell(ButtonId::Up, startX + cellW + gapX, startY);
-  drawButtonCell(ButtonId::Down, startX + cellW + gapX, startY + cellH + gapY);
-  drawButtonCell(ButtonId::Left, startX, startY + cellH + gapY);
-  drawButtonCell(ButtonId::Right, startX + cellW + gapX, startY + 2 * (cellH + gapY));
-  drawButtonCell(ButtonId::A, startX + cellW + gapX, startY + 3 * (cellH + gapY));
-  drawButtonCell(ButtonId::B, startX, startY + 3 * (cellH + gapY));
-  drawButtonCell(ButtonId::Start, startX + cellW + gapX, startY + 4 * (cellH + gapY));
-  drawButtonCell(ButtonId::Select, startX, startY + 4 * (cellH + gapY));
-
-  // Display last button pressed with real-time feedback
-  tft.fillRoundRect(30, 240, 180, 48, 10, COLOR_PANEL);
-  tft.drawRoundRect(30, 240, 180, 48, 10, COLOR_PANEL_ALT);
-  tft.setTextSize(2);
-  tft.setTextColor(COLOR_HIGHLIGHT);
-  if (lastButtonPressed >= 0 && lastButtonPressed < static_cast<int>(ButtonId::Count)) {
-    drawCenteredText(buttonLabels[lastButtonPressed], 120, 252, 2, COLOR_HIGHLIGHT);
-  } else {
-    drawCenteredText("waiting...", 120, 252, 1, COLOR_MUTED);
+  const int itemCount = static_cast<int>(MainMenuItem::Count);
+  int startIndex = static_cast<int>(mainMenuSelection) - 1;
+  if (startIndex < 0) {
+    startIndex = 0;
+  }
+  if (startIndex > itemCount - 3) {
+    startIndex = itemCount - 3;
   }
 
-  drawFooter("B or SELECT to return");
+  for (int row = 0; row < 3; ++row) {
+    const int itemIndex = startIndex + row;
+    if (itemIndex >= itemCount) {
+      continue;
+    }
+    display.setCursor(0, 16 + row * 12);
+    display.print(itemIndex == static_cast<int>(mainMenuSelection) ? "> " : "  ");
+    display.print(mainMenuLabels[itemIndex]);
+  }
+
+  display.setCursor(0, 52);
+  display.print("A/START ok  B/SEL back");
+  display.display();
 }
 
-void drawPlaceholderScreen() {
-  tft.fillScreen(COLOR_BG);
-  drawHeader(placeholderTitle.c_str(), "Game framework placeholder");
+void drawInputTest() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
 
-  tft.fillRoundRect(20, 92, 200, 98, 12, COLOR_PANEL);
-  tft.drawRoundRect(20, 92, 200, 98, 12, COLOR_PANEL_ALT);
-  drawCenteredText("Game logic is not", 120, 116, 2, COLOR_TEXT);
-  drawCenteredText("implemented yet", 120, 140, 2, COLOR_TEXT);
-  drawCenteredText("Press B or SELECT to go back", 120, 168, 1, COLOR_MUTED);
+  display.setCursor(0, 0);
+  display.print("Input Test");
+  display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
 
-  drawFooter("A/START can confirm from the menu");
+  char pressedLine[64];
+  buildPressedList(pressedLine, sizeof(pressedLine));
+
+  display.setCursor(0, 16);
+  display.print("Pressed:");
+  display.setCursor(0, 26);
+  display.print(pressedLine);
+
+  display.setCursor(0, 40);
+  display.print("Hold buttons to test");
+  display.setCursor(0, 52);
+  display.print("B/SELECT back");
+  display.display();
+}
+
+void drawSettings() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  display.setCursor(0, 0);
+  display.print("Settings");
+  display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
+
+  display.setCursor(0, 14);
+  display.print("ESP32 Game Console");
+
+  display.setCursor(0, 24);
+  display.print("Servo: ");
+  display.print(servoController.isRunning() ? "running" : "ready");
+
+  display.setCursor(0, 36);
+  display.print(settingsSelection == SettingsItem::ServoTest ? "> " : "  ");
+  display.print(settingsLabels[static_cast<size_t>(SettingsItem::ServoTest)]);
+
+  display.setCursor(0, 46);
+  display.print(settingsSelection == SettingsItem::BuzzerTest ? "> " : "  ");
+  display.print(settingsLabels[static_cast<size_t>(SettingsItem::BuzzerTest)]);
+
+  display.setCursor(0, 56);
+  display.print(settingsSelection == SettingsItem::Back ? "> " : "  ");
+  display.print(settingsLabels[static_cast<size_t>(SettingsItem::Back)]);
+  display.display();
+}
+
+void drawPlaceholder(const char *title) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print(title);
+  display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
+  display.setCursor(0, 20);
+  display.print("Not implemented yet");
+  display.setCursor(0, 34);
+  display.print("Press B/SELECT back");
+  display.display();
 }
 
 void renderScreen() {
@@ -404,127 +357,118 @@ void renderScreen() {
     case Screen::MainMenu:
       drawMainMenu();
       break;
-    case Screen::Settings:
-      drawSettingsScreen();
-      break;
     case Screen::InputTest:
-      drawInputTestScreen();
+      drawInputTest();
       break;
-    case Screen::PlaceholderGame:
-      drawPlaceholderScreen();
+    case Screen::Settings:
+      drawSettings();
+      break;
+    case Screen::Placeholder:
+      drawPlaceholder(mainMenuLabels[static_cast<size_t>(mainMenuSelection)]);
       break;
   }
-
   screenDirty = false;
+  renderedPressedMask = currentPressedMask;
 }
 
-void enterPlaceholderGame(const char *title) {
-  placeholderTitle = title;
-  setScreen(Screen::PlaceholderGame);
-}
-
-void openSelectedMainMenuItem() {
-  buzzer.select();
-  switch (mainMenuSelection) {
-    case MainMenuItem::Snake:
-      enterPlaceholderGame("Snake");
-      break;
-    case MainMenuItem::Tetris:
-      enterPlaceholderGame("Tetris");
-      break;
-    case MainMenuItem::Settings:
-      setScreen(Screen::Settings);
-      break;
-    case MainMenuItem::Count:
-      break;
+void openMainMenuSelection() {
+  if (mainMenuSelection == MainMenuItem::Settings) {
+    buzzer.confirmBeep();
+    setScreen(Screen::Settings);
+    return;
   }
-}
 
-void activateSettingsSelection(uint32_t now) {
-  switch (settingsSelection) {
-    case SettingsItem::InputTest:
-      buzzer.info();
-      setScreen(Screen::InputTest);
-      break;
-    case SettingsItem::ServoTest:
-      buzzer.select();
-      servoController.triggerTest(now);
-      screenDirty = true;
-      break;
-    case SettingsItem::Back:
-      buzzer.select();
-      setScreen(Screen::MainMenu);
-      break;
-    case SettingsItem::Count:
-      break;
-  }
+  buzzer.confirmBeep();
+  setScreen(Screen::Placeholder);
 }
 
 void handleMainMenuInput(uint32_t now) {
+  (void)now;
+
   if (buttons[static_cast<size_t>(ButtonId::Up)].justPressed()) {
-    const uint8_t next = (static_cast<uint8_t>(mainMenuSelection) + static_cast<uint8_t>(MainMenuItem::Count) - 1) % static_cast<uint8_t>(MainMenuItem::Count);
-    selectMainMenuItem(static_cast<MainMenuItem>(next));
-    buzzer.click();
+    const int current = static_cast<int>(mainMenuSelection);
+    mainMenuSelection = static_cast<MainMenuItem>((current + static_cast<int>(MainMenuItem::Count) - 1) % static_cast<int>(MainMenuItem::Count));
+    buzzer.navBeep();
+    screenDirty = true;
   }
 
   if (buttons[static_cast<size_t>(ButtonId::Down)].justPressed()) {
-    const uint8_t next = (static_cast<uint8_t>(mainMenuSelection) + 1) % static_cast<uint8_t>(MainMenuItem::Count);
-    selectMainMenuItem(static_cast<MainMenuItem>(next));
-    buzzer.click();
+    const int current = static_cast<int>(mainMenuSelection);
+    mainMenuSelection = static_cast<MainMenuItem>((current + 1) % static_cast<int>(MainMenuItem::Count));
+    buzzer.navBeep();
+    screenDirty = true;
   }
 
   if (buttons[static_cast<size_t>(ButtonId::A)].justPressed() || buttons[static_cast<size_t>(ButtonId::Start)].justPressed()) {
-    openSelectedMainMenuItem();
+    openMainMenuSelection();
   }
-
-  (void)now;
 }
 
 void handleSettingsInput(uint32_t now) {
   if (buttons[static_cast<size_t>(ButtonId::Up)].justPressed()) {
-    const uint8_t next = (static_cast<uint8_t>(settingsSelection) + static_cast<uint8_t>(SettingsItem::Count) - 1) % static_cast<uint8_t>(SettingsItem::Count);
-    selectSettingsItem(static_cast<SettingsItem>(next));
-    buzzer.click();
+    const int current = static_cast<int>(settingsSelection);
+    settingsSelection = static_cast<SettingsItem>((current + static_cast<int>(SettingsItem::Count) - 1) % static_cast<int>(SettingsItem::Count));
+    buzzer.navBeep();
+    screenDirty = true;
   }
 
   if (buttons[static_cast<size_t>(ButtonId::Down)].justPressed()) {
-    const uint8_t next = (static_cast<uint8_t>(settingsSelection) + 1) % static_cast<uint8_t>(SettingsItem::Count);
-    selectSettingsItem(static_cast<SettingsItem>(next));
-    buzzer.click();
+    const int current = static_cast<int>(settingsSelection);
+    settingsSelection = static_cast<SettingsItem>((current + 1) % static_cast<int>(SettingsItem::Count));
+    buzzer.navBeep();
+    screenDirty = true;
   }
 
   if (buttons[static_cast<size_t>(ButtonId::A)].justPressed() || buttons[static_cast<size_t>(ButtonId::Start)].justPressed()) {
-    activateSettingsSelection(now);
-  }
-
-  if (buttons[static_cast<size_t>(ButtonId::B)].justPressed() || buttons[static_cast<size_t>(ButtonId::Select)].justPressed()) {
-    buzzer.select();
-    setScreen(Screen::MainMenu);
-  }
-}
-
-void handleInputTestInput(uint32_t now) {
-  for (uint8_t index = 0; index < static_cast<uint8_t>(ButtonId::Count); ++index) {
-    if (buttons[index].justPressed()) {
-      inputSeenMask |= (1U << index);
-      lastButtonPressed = index;
-      lastButtonPressedAtMs = now;
-      buzzer.click();
-      screenDirty = true;
+    buzzer.confirmBeep();
+    switch (settingsSelection) {
+      case SettingsItem::ServoTest:
+        servoController.startTest(now);
+        screenDirty = true;
+        break;
+      case SettingsItem::BuzzerTest:
+        buzzerTestActive = true;
+        buzzerTestEndsAtMs = now + 250;
+        tone(BUZZER_PIN, 1800);
+        screenDirty = true;
+        break;
+      case SettingsItem::Back:
+        setScreen(Screen::MainMenu);
+        break;
+      case SettingsItem::Count:
+        break;
     }
   }
 
   if (buttons[static_cast<size_t>(ButtonId::B)].justPressed() || buttons[static_cast<size_t>(ButtonId::Select)].justPressed()) {
-    buzzer.select();
-    setScreen(Screen::Settings);
+    buzzer.confirmBeep();
+    setScreen(Screen::MainMenu);
   }
 }
 
-void handlePlaceholderInput() {
+void handleInputTest(uint32_t now) {
+  uint8_t newPressedMask = 0;
+  for (uint8_t index = 0; index < static_cast<uint8_t>(ButtonId::Count); ++index) {
+    if (buttons[index].pressed()) {
+      newPressedMask |= (1U << index);
+    }
+    if (buttons[index].justPressed()) {
+      lastPressedButton = index;
+      screenDirty = true;
+    }
+  }
+
+  if (newPressedMask != currentPressedMask) {
+    currentPressedMask = newPressedMask;
+    screenDirty = true;
+  }
+
   if (buttons[static_cast<size_t>(ButtonId::B)].justPressed() || buttons[static_cast<size_t>(ButtonId::Select)].justPressed()) {
-    buzzer.select();
+    buzzer.confirmBeep();
     setScreen(Screen::MainMenu);
   }
+
+  (void)now;
 }
 
 void updateButtons(uint32_t now) {
@@ -536,49 +480,54 @@ void updateButtons(uint32_t now) {
 void setup() {
   Serial.begin(115200);
 
-  tft.begin();
-  tft.setRotation(0);
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+    Serial.println("SSD1306 init failed");
+    for (;;) {
+      delay(100);
+    }
+  }
+
+  display.clearDisplay();
+  display.display();
 
   buzzer.begin();
   servoController.begin();
 
   for (size_t index = 0; index < buttons.size(); ++index) {
-    buttons[index].pin = buttonPins[index];
+    buttons[index].begin(buttonPins[index]);
   }
 
-  for (Button &button : buttons) {
-    button.begin();
-  }
-  buttonsReady = true;
-
-  tft.fillScreen(COLOR_BG);
-  drawCenteredText("Booting console...", 120, 146, 2, COLOR_TEXT);
-  delay(150);
-  screenDirty = true;
+  renderScreen();
 }
 
 void loop() {
   const uint32_t now = millis();
+
   updateButtons(now);
-  if (servoController.update(now)) {
+  servoController.update(now);
+
+  if (buzzerTestActive && static_cast<int32_t>(now - buzzerTestEndsAtMs) >= 0) {
+    noTone(BUZZER_PIN);
+    buzzerTestActive = false;
     screenDirty = true;
   }
 
-  if (buttonsReady) {
-    switch (currentScreen) {
-      case Screen::MainMenu:
-        handleMainMenuInput(now);
-        break;
-      case Screen::Settings:
-        handleSettingsInput(now);
-        break;
-      case Screen::InputTest:
-        handleInputTestInput(now);
-        break;
-      case Screen::PlaceholderGame:
-        handlePlaceholderInput();
-        break;
-    }
+  switch (currentScreen) {
+    case Screen::MainMenu:
+      handleMainMenuInput(now);
+      break;
+    case Screen::InputTest:
+      handleInputTest(now);
+      break;
+    case Screen::Settings:
+      handleSettingsInput(now);
+      break;
+    case Screen::Placeholder:
+      if (buttons[static_cast<size_t>(ButtonId::B)].justPressed() || buttons[static_cast<size_t>(ButtonId::Select)].justPressed()) {
+        setScreen(Screen::MainMenu);
+      }
+      break;
   }
 
   if (screenDirty) {
