@@ -1,4 +1,4 @@
-﻿#include <Arduino.h>
+#include <Arduino.h>
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -6,6 +6,9 @@
 
 #include <array>
 #include <cstring>
+
+#include "SnakeGame.h"
+#include "TetrisGame.h"
 
 constexpr uint8_t OLED_SDA = 21;
 constexpr uint8_t OLED_SCL = 22;
@@ -33,6 +36,8 @@ Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 
 enum class Screen : uint8_t {
   MainMenu,
+  Snake,
+  Tetris,
   InputTest,
   Settings,
   Placeholder,
@@ -42,7 +47,8 @@ enum class MainMenuItem : uint8_t {
   Snake = 0,
   Tetris = 1,
   Settings = 2,
-  Count = 3,
+  Lock = 3,
+  Count = 4,
 };
 
 enum class SettingsItem : uint8_t {
@@ -117,8 +123,16 @@ class Buzzer {
     tone(pin_, 2200, 25);
   }
 
+  void foodBeep() const {
+    tone(pin_, 2600, 20);
+  }
+
   void confirmBeep() const {
     tone(pin_, 1400, 45);
+  }
+
+  void unlockBeep() const {
+    tone(pin_, 900, 80);
   }
 
   void errorBeep() const {
@@ -134,36 +148,61 @@ class ServoController {
   void begin() {
     servo_.setPeriodHertz(50);
     servo_.attach(SERVO_PIN, 500, 2400);
+    lock();
+  }
+
+  void unlock() {
+    unlocked_ = true;
+    testActive_ = false;
+    servo_.write(unlockAngle_);
+  }
+
+  void lock() {
+    unlocked_ = false;
+    testActive_ = false;
     servo_.write(restAngle_);
   }
 
-  void startTest(uint32_t now) {
-    if (running_) {
+  void pulse(uint32_t now) {
+    if (testActive_) {
       return;
     }
+    pulseRestoreUnlocked_ = unlocked_;
     servo_.write(unlockAngle_);
-    running_ = true;
+    testActive_ = true;
     endsAtMs_ = now + SERVO_TEST_DURATION_MS;
   }
 
   bool update(uint32_t now) {
-    if (running_ && static_cast<int32_t>(now - endsAtMs_) >= 0) {
-      servo_.write(restAngle_);
-      running_ = false;
+    if (testActive_ && static_cast<int32_t>(now - endsAtMs_) >= 0) {
+      testActive_ = false;
+      if (pulseRestoreUnlocked_) {
+        servo_.write(unlockAngle_);
+        unlocked_ = true;
+      } else {
+        servo_.write(restAngle_);
+        unlocked_ = false;
+      }
       return true;
     }
     return false;
   }
 
   bool isRunning() const {
-    return running_;
+    return testActive_;
+  }
+
+  bool isUnlocked() const {
+    return unlocked_;
   }
 
  private:
   Servo servo_;
   const uint8_t restAngle_ = SERVO_REST_ANGLE;
   const uint8_t unlockAngle_ = SERVO_UNLOCK_ANGLE;
-  bool running_ = false;
+  bool unlocked_ = false;
+  bool testActive_ = false;
+  bool pulseRestoreUnlocked_ = false;
   uint32_t endsAtMs_ = 0;
 };
 
@@ -193,6 +232,7 @@ constexpr std::array<const char *, static_cast<size_t>(MainMenuItem::Count)> mai
     "Snake",
     "Tetris",
     "Settings",
+    "Lock",
 }};
 
 constexpr std::array<const char *, static_cast<size_t>(SettingsItem::Count)> settingsLabels = {{
@@ -203,6 +243,8 @@ constexpr std::array<const char *, static_cast<size_t>(SettingsItem::Count)> set
 
 Buzzer buzzer(BUZZER_PIN);
 ServoController servoController;
+SnakeGame snakeGame;
+TetrisGame tetrisGame;
 std::array<Button, static_cast<size_t>(ButtonId::Count)> buttons;
 
 Screen currentScreen = Screen::MainMenu;
@@ -215,20 +257,65 @@ bool screenDirty = true;
 bool buzzerTestActive = false;
 uint32_t buzzerTestEndsAtMs = 0;
 
+void onSnakeFood() {
+  buzzer.foodBeep();
+}
+
+void onSnakeGameOver() {
+  buzzer.errorBeep();
+}
+
+void onSnakeUnlock(uint32_t now) {
+  buzzer.unlockBeep();
+  servoController.unlock();
+  (void)now;
+}
+
+void onTetrisLineClear(uint8_t linesCleared, uint32_t score) {
+  (void)linesCleared;
+  (void)score;
+  buzzer.confirmBeep();
+}
+
+void onTetrisGameOver() {
+  buzzer.errorBeep();
+}
+
+void onTetrisUnlock(uint32_t score) {
+  (void)score;
+  buzzer.unlockBeep();
+  servoController.unlock();
+}
+
+SnakeInput readSnakeInput() {
+  SnakeInput input{};
+  input.upEdge = buttons[static_cast<size_t>(ButtonId::Up)].justPressed();
+  input.downEdge = buttons[static_cast<size_t>(ButtonId::Down)].justPressed();
+  input.leftEdge = buttons[static_cast<size_t>(ButtonId::Left)].justPressed();
+  input.rightEdge = buttons[static_cast<size_t>(ButtonId::Right)].justPressed();
+  input.aEdge = buttons[static_cast<size_t>(ButtonId::A)].justPressed();
+  input.bEdge = buttons[static_cast<size_t>(ButtonId::B)].justPressed();
+  input.startEdge = buttons[static_cast<size_t>(ButtonId::Start)].justPressed();
+  input.selectEdge = buttons[static_cast<size_t>(ButtonId::Select)].justPressed();
+  return input;
+}
+
+TetrisInput readTetrisInput() {
+  TetrisInput input{};
+  input.upEdge = buttons[static_cast<size_t>(ButtonId::Up)].justPressed();
+  input.downEdge = buttons[static_cast<size_t>(ButtonId::Down)].justPressed();
+  input.leftEdge = buttons[static_cast<size_t>(ButtonId::Left)].justPressed();
+  input.rightEdge = buttons[static_cast<size_t>(ButtonId::Right)].justPressed();
+  input.aEdge = buttons[static_cast<size_t>(ButtonId::A)].justPressed();
+  input.bEdge = buttons[static_cast<size_t>(ButtonId::B)].justPressed();
+  input.startEdge = buttons[static_cast<size_t>(ButtonId::Start)].justPressed();
+  input.selectEdge = buttons[static_cast<size_t>(ButtonId::Select)].justPressed();
+  return input;
+}
+
 void setScreen(Screen screen) {
   currentScreen = screen;
   screenDirty = true;
-}
-
-void drawCenteredText(int16_t centerX, int16_t y, const char *text, uint8_t size = 1) {
-  int16_t x1 = 0;
-  int16_t y1 = 0;
-  uint16_t w = 0;
-  uint16_t h = 0;
-  display.setTextSize(size);
-  display.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
-  display.setCursor(centerX - static_cast<int16_t>(w / 2), y);
-  display.print(text);
 }
 
 void buildPressedList(char *buffer, size_t bufferSize) {
@@ -260,27 +347,15 @@ void drawMainMenu() {
   display.print("ESP32 Game Console");
   display.drawFastHLine(0, 10, 128, SSD1306_WHITE);
 
-  const int itemCount = static_cast<int>(MainMenuItem::Count);
-  int startIndex = static_cast<int>(mainMenuSelection) - 1;
-  if (startIndex < 0) {
-    startIndex = 0;
-  }
-  if (startIndex > itemCount - 3) {
-    startIndex = itemCount - 3;
+  for (int row = 0; row < static_cast<int>(MainMenuItem::Count); ++row) {
+    display.setCursor(0, 14 + row * 10);
+    display.print(row == static_cast<int>(mainMenuSelection) ? "> " : "  ");
+    display.print(mainMenuLabels[row]);
   }
 
-  for (int row = 0; row < 3; ++row) {
-    const int itemIndex = startIndex + row;
-    if (itemIndex >= itemCount) {
-      continue;
-    }
-    display.setCursor(0, 16 + row * 12);
-    display.print(itemIndex == static_cast<int>(mainMenuSelection) ? "> " : "  ");
-    display.print(mainMenuLabels[itemIndex]);
-  }
-
-  display.setCursor(0, 52);
-  display.print("A/START ok  B/SEL back");
+  display.setCursor(0, 56);
+  display.print("Servo:");
+  display.print(servoController.isUnlocked() ? "UNLOCKED" : "LOCKED");
   display.display();
 }
 
@@ -322,7 +397,7 @@ void drawSettings() {
 
   display.setCursor(0, 24);
   display.print("Servo: ");
-  display.print(servoController.isRunning() ? "running" : "ready");
+  display.print(servoController.isUnlocked() ? "unlocked" : "locked");
 
   display.setCursor(0, 36);
   display.print(settingsSelection == SettingsItem::ServoTest ? "> " : "  ");
@@ -357,6 +432,12 @@ void renderScreen() {
     case Screen::MainMenu:
       drawMainMenu();
       break;
+    case Screen::Snake:
+      snakeGame.render(display);
+      break;
+    case Screen::Tetris:
+      tetrisGame.render(display);
+      break;
     case Screen::InputTest:
       drawInputTest();
       break;
@@ -367,19 +448,69 @@ void renderScreen() {
       drawPlaceholder(mainMenuLabels[static_cast<size_t>(mainMenuSelection)]);
       break;
   }
+
   screenDirty = false;
   renderedPressedMask = currentPressedMask;
 }
 
 void openMainMenuSelection() {
+  if (mainMenuSelection == MainMenuItem::Snake) {
+    buzzer.confirmBeep();
+    snakeGame.start(millis());
+    setScreen(Screen::Snake);
+    return;
+  }
+
+  if (mainMenuSelection == MainMenuItem::Tetris) {
+    buzzer.confirmBeep();
+    tetrisGame.start(millis());
+    setScreen(Screen::Tetris);
+    return;
+  }
+
   if (mainMenuSelection == MainMenuItem::Settings) {
     buzzer.confirmBeep();
     setScreen(Screen::Settings);
     return;
   }
 
+  if (mainMenuSelection == MainMenuItem::Lock) {
+    buzzer.confirmBeep();
+    servoController.lock();
+    screenDirty = true;
+    return;
+  }
+
   buzzer.confirmBeep();
   setScreen(Screen::Placeholder);
+}
+
+void handleSnakeInput(uint32_t now) {
+  snakeGame.update(now, readSnakeInput());
+
+  if (snakeGame.needsRedraw()) {
+    screenDirty = true;
+    snakeGame.clearRedraw();
+  }
+
+  if (snakeGame.shouldReturnToMenu()) {
+    snakeGame.clearReturnToMenuRequest();
+    setScreen(Screen::MainMenu);
+  }
+}
+
+void handleTetrisInput(uint32_t now) {
+  tetrisGame.update(now, readTetrisInput());
+
+  if (tetrisGame.needsRedraw()) {
+    screenDirty = true;
+    tetrisGame.clearRedraw();
+  }
+
+  if (tetrisGame.shouldReturnToMenu()) {
+    tetrisGame.clearReturnToMenuRequest();
+    setScreen(Screen::MainMenu);
+  }
 }
 
 void handleMainMenuInput(uint32_t now) {
@@ -423,7 +554,7 @@ void handleSettingsInput(uint32_t now) {
     buzzer.confirmBeep();
     switch (settingsSelection) {
       case SettingsItem::ServoTest:
-        servoController.startTest(now);
+        servoController.pulse(now);
         screenDirty = true;
         break;
       case SettingsItem::BuzzerTest:
@@ -479,6 +610,19 @@ void updateButtons(uint32_t now) {
 
 void setup() {
   Serial.begin(115200);
+  randomSeed(micros());
+
+  SnakeGame::Callbacks snakeCallbacks;
+  snakeCallbacks.onFood = onSnakeFood;
+  snakeCallbacks.onGameOver = onSnakeGameOver;
+  snakeCallbacks.onUnlock = onSnakeUnlock;
+  snakeGame.setCallbacks(snakeCallbacks);
+
+  TetrisGame::Callbacks tetrisCallbacks;
+  tetrisCallbacks.onLineClear = onTetrisLineClear;
+  tetrisCallbacks.onGameOver = onTetrisGameOver;
+  tetrisCallbacks.onUnlock = onTetrisUnlock;
+  tetrisGame.setCallbacks(tetrisCallbacks);
 
   Wire.begin(OLED_SDA, OLED_SCL);
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
@@ -505,7 +649,9 @@ void loop() {
   const uint32_t now = millis();
 
   updateButtons(now);
-  servoController.update(now);
+  if (servoController.update(now)) {
+    screenDirty = true;
+  }
 
   if (buzzerTestActive && static_cast<int32_t>(now - buzzerTestEndsAtMs) >= 0) {
     noTone(BUZZER_PIN);
@@ -516,6 +662,12 @@ void loop() {
   switch (currentScreen) {
     case Screen::MainMenu:
       handleMainMenuInput(now);
+      break;
+    case Screen::Snake:
+      handleSnakeInput(now);
+      break;
+    case Screen::Tetris:
+      handleTetrisInput(now);
       break;
     case Screen::InputTest:
       handleInputTest(now);
