@@ -77,6 +77,7 @@ struct Button {
   uint32_t lastChangeMs = 0;
   bool justPressedEdge = false;
 
+  // Initializeaza pinul butonului in mod pull-up intern.
   void begin(uint8_t assignedPin) {
     pin = assignedPin;
     pinMode(pin, INPUT_PULLUP);
@@ -85,6 +86,7 @@ struct Button {
     lastChangeMs = millis();
   }
 
+  // Aplica debounce si detecteaza tranzitia de apasare.
   void update(uint32_t now) {
     justPressedEdge = false;
     const bool rawState = digitalRead(pin);
@@ -105,6 +107,7 @@ struct Button {
     return stableState == LOW;
   }
 
+  // Returneaza true doar pe frame-ul in care butonul a devenit apasat.
   bool justPressed() const {
     return justPressedEdge;
   }
@@ -114,6 +117,7 @@ class Buzzer {
  public:
   explicit Buzzer(uint8_t pin) : pin_(pin) {}
 
+  // Configureaza buzzerul si opreste orice ton ramas activ.
   void begin() const {
     pinMode(pin_, OUTPUT);
     noTone(pin_);
@@ -145,24 +149,28 @@ class Buzzer {
 
 class ServoController {
  public:
+  // Ataseaza servo-ul si porneste in stare blocata.
   void begin() {
     servo_.setPeriodHertz(50);
     servo_.attach(SERVO_PIN, 500, 2400);
     lock();
   }
 
+  // Deblocheaza persistent servo-ul.
   void unlock() {
     unlocked_ = true;
     testActive_ = false;
     servo_.write(unlockAngle_);
   }
 
+  // Blocheaza persistent servo-ul.
   void lock() {
     unlocked_ = false;
     testActive_ = false;
     servo_.write(restAngle_);
   }
 
+  // Ruleaza un test temporar al servo-ului, apoi revine la starea anterioara.
   void pulse(uint32_t now) {
     if (testActive_) {
       return;
@@ -173,6 +181,7 @@ class ServoController {
     endsAtMs_ = now + SERVO_TEST_DURATION_MS;
   }
 
+  // Verifica daca testul temporar s-a terminat si revine la starea corecta.
   bool update(uint32_t now) {
     if (testActive_ && static_cast<int32_t>(now - endsAtMs_) >= 0) {
       testActive_ = false;
@@ -257,36 +266,43 @@ bool screenDirty = true;
 bool buzzerTestActive = false;
 uint32_t buzzerTestEndsAtMs = 0;
 
+// Callback Snake: sunet cand se mananca hrana.
 void onSnakeFood() {
   buzzer.foodBeep();
 }
 
+// Callback Snake: sunet la game over.
 void onSnakeGameOver() {
   buzzer.errorBeep();
 }
 
+// Callback Snake: deblocheaza servo-ul la pragul de scor.
 void onSnakeUnlock(uint32_t now) {
   buzzer.unlockBeep();
   servoController.unlock();
   (void)now;
 }
 
+// Callback Tetris: semnal audio la eliminare de linii.
 void onTetrisLineClear(uint8_t linesCleared, uint32_t score) {
   (void)linesCleared;
   (void)score;
   buzzer.confirmBeep();
 }
 
+// Callback Tetris: sunet la game over.
 void onTetrisGameOver() {
   buzzer.errorBeep();
 }
 
+// Callback Tetris: deblocheaza servo-ul la pragul de scor.
 void onTetrisUnlock(uint32_t score) {
   (void)score;
   buzzer.unlockBeep();
   servoController.unlock();
 }
 
+// Construieste input-ul pentru modulul Snake pe baza butoanelor.
 SnakeInput readSnakeInput() {
   SnakeInput input{};
   input.upEdge = buttons[static_cast<size_t>(ButtonId::Up)].justPressed();
@@ -300,6 +316,7 @@ SnakeInput readSnakeInput() {
   return input;
 }
 
+// Construieste input-ul pentru modulul Tetris pe baza butoanelor.
 TetrisInput readTetrisInput() {
   TetrisInput input{};
   input.upEdge = buttons[static_cast<size_t>(ButtonId::Up)].justPressed();
@@ -313,11 +330,13 @@ TetrisInput readTetrisInput() {
   return input;
 }
 
+// Schimba ecranul activ si forteaza rerandare.
 void setScreen(Screen screen) {
   currentScreen = screen;
   screenDirty = true;
 }
 
+// Transformeaza masca de butoane intr-un text afisabil pentru Input Test.
 void buildPressedList(char *buffer, size_t bufferSize) {
   buffer[0] = '\0';
   bool first = true;
@@ -338,6 +357,7 @@ void buildPressedList(char *buffer, size_t bufferSize) {
   }
 }
 
+// Deseneaza meniul principal si starea curenta a servo-ului.
 void drawMainMenu() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -359,6 +379,7 @@ void drawMainMenu() {
   display.display();
 }
 
+// Deseneaza ecranul de test pentru intrari.
 void drawInputTest() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -383,6 +404,7 @@ void drawInputTest() {
   display.display();
 }
 
+// Deseneaza meniul de setari.
 void drawSettings() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -413,6 +435,7 @@ void drawSettings() {
   display.display();
 }
 
+// Ecran generic pentru optiuni neimplementate.
 void drawPlaceholder(const char *title) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -427,6 +450,7 @@ void drawPlaceholder(const char *title) {
   display.display();
 }
 
+// Router de randare in functie de ecranul activ.
 void renderScreen() {
   switch (currentScreen) {
     case Screen::MainMenu:
@@ -453,6 +477,7 @@ void renderScreen() {
   renderedPressedMask = currentPressedMask;
 }
 
+// Deschide actiunea asociata elementului selectat din meniul principal.
 void openMainMenuSelection() {
   if (mainMenuSelection == MainMenuItem::Snake) {
     buzzer.confirmBeep();
@@ -485,6 +510,7 @@ void openMainMenuSelection() {
   setScreen(Screen::Placeholder);
 }
 
+// Actualizeaza logica pentru jocul Snake.
 void handleSnakeInput(uint32_t now) {
   snakeGame.update(now, readSnakeInput());
 
@@ -499,6 +525,7 @@ void handleSnakeInput(uint32_t now) {
   }
 }
 
+// Actualizeaza logica pentru jocul Tetris.
 void handleTetrisInput(uint32_t now) {
   tetrisGame.update(now, readTetrisInput());
 
@@ -513,6 +540,7 @@ void handleTetrisInput(uint32_t now) {
   }
 }
 
+// Navigare in meniul principal.
 void handleMainMenuInput(uint32_t now) {
   (void)now;
 
@@ -535,6 +563,7 @@ void handleMainMenuInput(uint32_t now) {
   }
 }
 
+// Navigare si actiuni in meniul de setari.
 void handleSettingsInput(uint32_t now) {
   if (buttons[static_cast<size_t>(ButtonId::Up)].justPressed()) {
     const int current = static_cast<int>(settingsSelection);
@@ -554,10 +583,12 @@ void handleSettingsInput(uint32_t now) {
     buzzer.confirmBeep();
     switch (settingsSelection) {
       case SettingsItem::ServoTest:
+        // Test scurt pentru servo, fara schimbarea permanenta a starii.
         servoController.pulse(now);
         screenDirty = true;
         break;
       case SettingsItem::BuzzerTest:
+        // Porneste un ton de test pentru buzzer.
         buzzerTestActive = true;
         buzzerTestEndsAtMs = now + 250;
         tone(BUZZER_PIN, 1800);
@@ -577,6 +608,7 @@ void handleSettingsInput(uint32_t now) {
   }
 }
 
+// Ecran de diagnostic pentru starea butoanelor.
 void handleInputTest(uint32_t now) {
   uint8_t newPressedMask = 0;
   for (uint8_t index = 0; index < static_cast<uint8_t>(ButtonId::Count); ++index) {
@@ -602,12 +634,14 @@ void handleInputTest(uint32_t now) {
   (void)now;
 }
 
+// Actualizeaza toate butoanele cu debounce.
 void updateButtons(uint32_t now) {
   for (Button &button : buttons) {
     button.update(now);
   }
 }
 
+// Initializare hardware, callback-uri si stare initiala UI.
 void setup() {
   Serial.begin(115200);
   randomSeed(micros());
@@ -625,6 +659,7 @@ void setup() {
   tetrisGame.setCallbacks(tetrisCallbacks);
 
   Wire.begin(OLED_SDA, OLED_SCL);
+  // Daca OLED-ul nu porneste, ramanem in bucla blocata pentru debugging.
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
     Serial.println("SSD1306 init failed");
     for (;;) {
@@ -645,20 +680,24 @@ void setup() {
   renderScreen();
 }
 
+// Bucla principala: input, update logica, apoi randare la nevoie.
 void loop() {
   const uint32_t now = millis();
 
   updateButtons(now);
+  // Daca servo-ul isi schimba starea dupa un test, rerandam UI.
   if (servoController.update(now)) {
     screenDirty = true;
   }
 
   if (buzzerTestActive && static_cast<int32_t>(now - buzzerTestEndsAtMs) >= 0) {
+    // Opreste tonul de test dupa durata stabilita.
     noTone(BUZZER_PIN);
     buzzerTestActive = false;
     screenDirty = true;
   }
 
+  // Router de update pentru fiecare ecran.
   switch (currentScreen) {
     case Screen::MainMenu:
       handleMainMenuInput(now);
@@ -682,6 +721,7 @@ void loop() {
       break;
   }
 
+  // Randam doar cand exista schimbari vizuale.
   if (screenDirty) {
     renderScreen();
   }

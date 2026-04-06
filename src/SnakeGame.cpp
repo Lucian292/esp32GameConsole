@@ -1,13 +1,16 @@
 #include "SnakeGame.h"
 
+// Seteaza functiile callback apelate de joc pentru sunete si unlock.
 void SnakeGame::setCallbacks(Callbacks callbacks) {
   callbacks_ = callbacks;
 }
 
+// Porneste jocul prin resetarea completa a starii.
 void SnakeGame::start(uint32_t now) {
   reset(now);
 }
 
+// Initializeaza o runda noua de Snake.
 void SnakeGame::reset(uint32_t now) {
   state_ = State::Playing;
   direction_ = Direction::Right;
@@ -31,6 +34,7 @@ void SnakeGame::reset(uint32_t now) {
   placeFood();
 }
 
+// Update principal: proceseaza input, timing si stari speciale.
 void SnakeGame::update(uint32_t now, const SnakeInput &input) {
   if (state_ == State::Idle) {
     return;
@@ -71,6 +75,7 @@ void SnakeGame::update(uint32_t now, const SnakeInput &input) {
   step(now);
 }
 
+// Randare completa a HUD-ului si a tablei de joc.
 void SnakeGame::render(Adafruit_SSD1306 &display) const {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -123,22 +128,27 @@ void SnakeGame::render(Adafruit_SSD1306 &display) const {
   display.display();
 }
 
+// Indica daca jocul cere rerandare.
 bool SnakeGame::needsRedraw() const {
   return redraw_;
 }
 
+// Marcheaza rerandarea ca efectuata.
 void SnakeGame::clearRedraw() {
   redraw_ = false;
 }
 
+// Indica daca jocul cere revenire in meniu.
 bool SnakeGame::shouldReturnToMenu() const {
   return returnToMenu_;
 }
 
+// Curata cererea de revenire in meniu dupa ce a fost tratata.
 void SnakeGame::clearReturnToMenuRequest() {
   returnToMenu_ = false;
 }
 
+// Genereaza o pozitie aleatoare pentru hrana, in afara corpului sarpelui.
 void SnakeGame::placeFood() {
   do {
     food_.x = static_cast<uint8_t>(random(GRID_WIDTH));
@@ -146,6 +156,7 @@ void SnakeGame::placeFood() {
   } while (containsPoint(food_.x, food_.y));
 }
 
+// Verifica daca un punct este ocupat de corpul sarpelui.
 bool SnakeGame::containsPoint(uint8_t x, uint8_t y) const {
   for (uint8_t index = 0; index < length_; ++index) {
     if (snake_[index].x == x && snake_[index].y == y) {
@@ -155,6 +166,7 @@ bool SnakeGame::containsPoint(uint8_t x, uint8_t y) const {
   return false;
 }
 
+// Verifica daca doua directii sunt opuse (interzis pentru schimbare instant).
 bool SnakeGame::isOpposite(Direction a, Direction b) const {
   return (a == Direction::Up && b == Direction::Down) ||
          (a == Direction::Down && b == Direction::Up) ||
@@ -162,6 +174,7 @@ bool SnakeGame::isOpposite(Direction a, Direction b) const {
          (a == Direction::Right && b == Direction::Left);
 }
 
+// Ajusteaza viteza jocului in functie de scor.
 uint32_t SnakeGame::stepInterval() const {
   uint32_t interval = 380;
   if (score_ > 8) {
@@ -174,6 +187,7 @@ uint32_t SnakeGame::stepInterval() const {
   return interval;
 }
 
+// Declanseaza deblocarea servo-ului si afisarea mesajului de unlock.
 void SnakeGame::triggerUnlock(uint32_t now) {
   unlockTriggered_ = true;
   unlockMessageUntilMs_ = now + 1200;
@@ -182,6 +196,7 @@ void SnakeGame::triggerUnlock(uint32_t now) {
   }
 }
 
+// Trecere in starea GameOver si notificare prin callback.
 void SnakeGame::gameOver() {
   state_ = State::GameOver;
   redraw_ = true;
@@ -190,6 +205,7 @@ void SnakeGame::gameOver() {
   }
 }
 
+// Executa un pas de joc: miscare, coliziuni, hrana, scor si unlock.
 void SnakeGame::step(uint32_t now) {
   direction_ = pendingDirection_;
 
@@ -230,8 +246,9 @@ void SnakeGame::step(uint32_t now) {
   }
   snake_[0] = head;
 
+  // Ramane pentru claritate: capul nou nu este tratat ca auto-coliziune.
   if (containsPoint(head.x, head.y) && !(snake_[1].x == head.x && snake_[1].y == head.y)) {
-    // Self-collision check after shift; ignore the new head position.
+    // Verificarea reala de auto-coliziune se face in bucla de mai jos.
   }
 
   for (uint8_t index = 1; index < length_; ++index) {
@@ -255,6 +272,7 @@ void SnakeGame::step(uint32_t now) {
     placeFood();
   }
 
+  // Programeaza urmatorul pas in functie de viteza curenta.
   nextStepAtMs_ = now + stepInterval();
   redraw_ = true;
 }

@@ -2,10 +2,12 @@
 
 namespace {
 
+// Reprezinta cele 4 rotatii pentru fiecare tip de piesa.
 struct ShapeSet {
   std::array<uint16_t, 4> rotations;
 };
 
+// Definitiile tetromino-urilor in format 4x4 pe biti.
 constexpr std::array<ShapeSet, 7> kShapes = {{
     ShapeSet{{0x0F00, 0x2222, 0x00F0, 0x4444}},
     ShapeSet{{0x0660, 0x0660, 0x0660, 0x0660}},
@@ -16,6 +18,7 @@ constexpr std::array<ShapeSet, 7> kShapes = {{
     ShapeSet{{0x02E0, 0x44C0, 0x0E80, 0xC440}},
 }};
 
+// Mapare index bit -> coordonate locale in matricea 4x4.
 constexpr uint8_t kCellBitPositions[16][2] = {
     {0, 0}, {1, 0}, {2, 0}, {3, 0},
     {0, 1}, {1, 1}, {2, 1}, {3, 1},
@@ -25,14 +28,17 @@ constexpr uint8_t kCellBitPositions[16][2] = {
 
 }  // namespace
 
+// Seteaza callback-urile de sunet, game over si unlock.
 void TetrisGame::setCallbacks(Callbacks callbacks) {
   callbacks_ = callbacks;
 }
 
+// Porneste jocul prin resetarea starii complete.
 void TetrisGame::start(uint32_t now) {
   reset(now);
 }
 
+// Initializeaza tabla, scorul si spawn-ul primei piese.
 void TetrisGame::reset(uint32_t now) {
   for (auto &row : board_) {
     row.fill(0);
@@ -49,6 +55,7 @@ void TetrisGame::reset(uint32_t now) {
   spawnPiece(now);
 }
 
+// Alege o piesa aleatoare si o plaseaza in pozitia initiala.
 void TetrisGame::spawnPiece(uint32_t now) {
   currentPiece_.type = static_cast<uint8_t>(random(static_cast<int>(kShapes.size())));
   currentPiece_.rotation = 0;
@@ -64,6 +71,7 @@ void TetrisGame::spawnPiece(uint32_t now) {
   setGameRedraw();
 }
 
+// Verifica daca o piesa poate fi plasata la coordonatele date.
 bool TetrisGame::canPlace(uint8_t type, uint8_t rotation, int8_t x, int8_t y) const {
   const uint16_t shape = kShapes[type].rotations[rotation & 3U];
   for (uint8_t index = 0; index < 16; ++index) {
@@ -86,6 +94,7 @@ bool TetrisGame::canPlace(uint8_t type, uint8_t rotation, int8_t x, int8_t y) co
   return true;
 }
 
+// Update principal: input, miscari, cadere si tranzitii de stare.
 void TetrisGame::update(uint32_t now, const TetrisInput &input) {
   if (state_ == State::Idle) {
     return;
@@ -132,6 +141,7 @@ void TetrisGame::update(uint32_t now, const TetrisInput &input) {
   }
 }
 
+// Randare completa pentru HUD, tabla, piesa curenta si stari speciale.
 void TetrisGame::render(Adafruit_SSD1306 &display) const {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -208,26 +218,32 @@ void TetrisGame::render(Adafruit_SSD1306 &display) const {
   display.display();
 }
 
+// Indica daca jocul cere rerandare.
 bool TetrisGame::needsRedraw() const {
   return redraw_;
 }
 
+// Marcheaza rerandarea ca rezolvata.
 void TetrisGame::clearRedraw() {
   redraw_ = false;
 }
 
+// Indica daca jocul cere revenire in meniu.
 bool TetrisGame::shouldReturnToMenu() const {
   return returnToMenu_;
 }
 
+// Curata flag-ul de revenire in meniu.
 void TetrisGame::clearReturnToMenuRequest() {
   returnToMenu_ = false;
 }
 
+// Forteaza rerandarea la urmatorul ciclu.
 void TetrisGame::setGameRedraw() {
   redraw_ = true;
 }
 
+// Muta piesa curenta daca nu apare coliziune.
 void TetrisGame::movePiece(int8_t dx, int8_t dy) {
   if (!canPlace(currentPiece_.type, currentPiece_.rotation, static_cast<int8_t>(currentPiece_.x + dx), static_cast<int8_t>(currentPiece_.y + dy))) {
     return;
@@ -238,6 +254,7 @@ void TetrisGame::movePiece(int8_t dx, int8_t dy) {
   setGameRedraw();
 }
 
+// Roteate piesa curenta daca pozitia rezultata este valida.
 void TetrisGame::rotatePiece(int8_t direction) {
   const uint8_t nextRotation = static_cast<uint8_t>((currentPiece_.rotation + direction + 4) & 3);
   if (!canPlace(currentPiece_.type, nextRotation, currentPiece_.x, currentPiece_.y)) {
@@ -248,6 +265,7 @@ void TetrisGame::rotatePiece(int8_t direction) {
   setGameRedraw();
 }
 
+// Coboara instant piesa pana la cel mai jos punct valid.
 void TetrisGame::hardDrop(uint32_t now) {
   while (canPlace(currentPiece_.type, currentPiece_.rotation, currentPiece_.x, static_cast<int8_t>(currentPiece_.y + 1))) {
     ++currentPiece_.y;
@@ -255,6 +273,7 @@ void TetrisGame::hardDrop(uint32_t now) {
   lockPiece(now);
 }
 
+// Cadere normala: coboara un rand sau fixeaza piesa in tabla.
 void TetrisGame::stepFall(uint32_t now) {
   if (canPlace(currentPiece_.type, currentPiece_.rotation, currentPiece_.x, static_cast<int8_t>(currentPiece_.y + 1))) {
     ++currentPiece_.y;
@@ -265,6 +284,7 @@ void TetrisGame::stepFall(uint32_t now) {
   lockPiece(now);
 }
 
+// Copiaza piesa curenta pe tabla, apoi proceseaza scorul si spawn-ul urmator.
 void TetrisGame::lockPiece(uint32_t now) {
   const uint16_t shape = kShapes[currentPiece_.type].rotations[currentPiece_.rotation & 3U];
   for (uint8_t index = 0; index < 16; ++index) {
@@ -286,6 +306,7 @@ void TetrisGame::lockPiece(uint32_t now) {
   spawnPiece(now);
 }
 
+// Sterge liniile complete si deplaseaza in jos continutul de deasupra.
 uint8_t TetrisGame::clearFullLines() {
   uint8_t clearedLines = 0;
 
@@ -317,6 +338,7 @@ uint8_t TetrisGame::clearFullLines() {
   return clearedLines;
 }
 
+// Aplica punctajul pentru liniile sterse si verifica pragul de unlock.
 void TetrisGame::applyScore(uint8_t linesCleared, uint32_t now) {
   if (linesCleared == 0) {
     return;
@@ -334,6 +356,7 @@ void TetrisGame::applyScore(uint8_t linesCleared, uint32_t now) {
   }
 }
 
+// Marcheaza unlock-ul si notifica logica externa.
 void TetrisGame::triggerUnlock(uint32_t score) {
   unlockTriggered_ = true;
   if (callbacks_.onUnlock != nullptr) {
@@ -341,6 +364,7 @@ void TetrisGame::triggerUnlock(uint32_t score) {
   }
 }
 
+// Trecere in starea GameOver si notificare prin callback.
 void TetrisGame::gameOver() {
   state_ = State::GameOver;
   redraw_ = true;
@@ -349,6 +373,7 @@ void TetrisGame::gameOver() {
   }
 }
 
+// Regleaza viteza de cadere in functie de scor.
 uint32_t TetrisGame::fallInterval() const {
   if (score_ >= 800) {
     return 170;
@@ -365,6 +390,7 @@ uint32_t TetrisGame::fallInterval() const {
   return 480;
 }
 
+// Intervalul folosit pentru soft drop.
 uint32_t TetrisGame::softDropInterval() const {
   return 90;
 }
